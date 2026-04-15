@@ -44,7 +44,9 @@ type TruckType = {
 
 type EvaluatedZone = Zone & {
   risk: number;
+  basePriority: Priority;
   priority: Priority;
+  operationalScore: number;
   predictedFill: number;
   gpsStatus: GpsStatus;
   etaMinutes: number;
@@ -109,6 +111,33 @@ function getPriority(risk: number): Priority {
   return 'Low';
 }
 
+function getTrafficPriorityBoost(mode: TrafficMode): number {
+  if (mode === 'Heavy') return 12;
+  if (mode === 'Moderate') return 6;
+  return 0;
+}
+
+function getGpsPriorityBoost(status: GpsStatus): number {
+  if (status === 'Watch') return 8;
+  if (status === 'Minor Delay') return 4;
+  return 0;
+}
+
+function getOperationalPriority(score: number): Priority {
+  if (score >= 92) return 'High';
+  if (score >= 56) return 'Medium';
+  return 'Low';
+}
+
+function getOperationalScore(
+  risk: number,
+  predictedFill: number,
+  trafficMode: TrafficMode,
+  gpsStatus: GpsStatus,
+): number {
+  return risk * 12 + predictedFill * 0.58 + getTrafficPriorityBoost(trafficMode) + getGpsPriorityBoost(gpsStatus);
+}
+
 function distance(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -139,9 +168,21 @@ function evaluateZones(zones: Zone[], trafficMode: TrafficMode, liveTick: number
   const factor = trafficFactor(trafficMode);
   return zones.map((zone, index) => {
     const risk = scoreRisk(zone);
+    const basePriority = getPriority(risk);
     const predictedFill = estimateFillLevel(zone, liveTick);
+    const gpsStatus = getGpsStatus(zone.id, liveTick);
+    const operationalScore = getOperationalScore(risk, predictedFill, trafficMode, gpsStatus);
     const etaMinutes = Math.round((8 + index * 3 + predictedFill / 20) * factor);
-    return { ...zone, risk, priority: getPriority(risk), predictedFill, gpsStatus: getGpsStatus(zone.id, liveTick), etaMinutes };
+    return {
+      ...zone,
+      risk,
+      basePriority,
+      priority: getOperationalPriority(operationalScore),
+      operationalScore,
+      predictedFill,
+      gpsStatus,
+      etaMinutes,
+    };
   });
 }
 
@@ -245,7 +286,7 @@ const WaterlooWasteAppPrototype: React.FC = () => {
       { label: 'High risk scoring test', pass: scoreRisk({ id: 99, code: 'T-1', name: 'Test High', city: 'Waterloo', serviceType: 'Garbage', bagLimit: 1, numUnits: 5, x: 0, y: 0 }) === 5 },
       { label: 'Low risk scoring test', pass: scoreRisk({ id: 100, code: 'T-2', name: 'Test Low', city: 'Cambridge', serviceType: 'Recycling', bagLimit: 3, numUnits: 2, x: 0, y: 0 }) === 0 },
       { label: 'Priority mapping test', pass: getPriority(4) === 'High' && getPriority(2) === 'Medium' && getPriority(0) === 'Low' },
-      { label: 'Evaluation pipeline test', pass: evaluateZones(baseZones.slice(0, 1), 'Normal', 2)[0]?.priority === getPriority(scoreRisk(baseZones[0])) },
+      { label: 'Evaluation pipeline test', pass: evaluateZones(baseZones.slice(0, 1), 'Normal', 2)[0]?.basePriority === getPriority(scoreRisk(baseZones[0])) },
       { label: 'Strict priority route test', pass: buildDynamicRoute(evaluateZones(baseZones, 'Normal', 0), trucks[0], true)[0]?.priority === 'High' },
     ],
     [],
@@ -294,7 +335,16 @@ const WaterlooWasteAppPrototype: React.FC = () => {
                       <p className="text-sm text-slate-200">{card.label}</p>
                       <Icon className="h-5 w-5" />
                     </div>
-                    <p className="mt-3 text-3xl font-semibold text-white">{card.value}</p>
+                    <motion.p
+                      key={`${card.label}-${card.value}`}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.28 }}
+                      className="mt-3 text-3xl font-semibold text-white"
+                    >
+                      {card.value}
+                    </motion.p>
+                    <p className="mt-1 text-xs text-slate-300/70">Live operational priority mix</p>
                   </div>
                 );
               })}
